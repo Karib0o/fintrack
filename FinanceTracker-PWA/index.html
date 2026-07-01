@@ -629,20 +629,20 @@ async function doSignOut() {
 //  DATA LOADING FROM SUPABASE
 // ═══════════════════════════════════════════
 async function loadData() {
-  const [{ data: txData, error: txErr }, { data: settData }] = await Promise.all([
-    db.from('transactions').select('*').order('date', {ascending:false}).order('created_at', {ascending:false}),
-    db.from('user_settings').select('*').eq('user_id', currentUser.id).maybeSingle()
+  const timeout = new Promise((_,reject) => setTimeout(()=>reject(new Error('Délai dépassé — vérifiez votre connexion')), 12000));
+  const [{ data: txData, error: txErr }, { data: settData }] = await Promise.race([
+    Promise.all([
+      db.from('transactions').select('*').order('date',{ascending:false}).order('created_at',{ascending:false}),
+      db.from('user_settings').select('*').eq('user_id',currentUser.id).maybeSingle()
+    ]),
+    timeout.then(()=>[{data:[],error:null},{data:null}])
   ]);
-
-  if (txErr) { showToast('Erreur de chargement: ' + txErr.message); txs=[]; }
-  else txs = (txData||[]).map(normalizeRow);
-
+  if (txErr) { txs=[]; } else txs=(txData||[]).map(normalizeRow);
   if (settData) {
-    settings  = { savingsPct: settData.savings_pct??20, avgMonths: settData.avg_months??3, fixedExpenses: settData.fixed_expenses||[] };
-    catRules  = settData.cat_rules && settData.cat_rules.length ? settData.cat_rules : [...DEFAULT_RULES];
+    settings = {savingsPct:settData.savings_pct??20,avgMonths:settData.avg_months??3,fixedExpenses:settData.fixed_expenses||[]};
+    catRules = settData.cat_rules&&settData.cat_rules.length?settData.cat_rules:[...DEFAULT_RULES];
   } else {
-    settings  = {...DEFAULT_SETTINGS};
-    catRules  = [...DEFAULT_RULES];
+    settings={...DEFAULT_SETTINGS}; catRules=[...DEFAULT_RULES];
   }
 }
 
@@ -1245,10 +1245,10 @@ document.getElementById('overlay').addEventListener('click',e=>{if(e.target===e.
 document.getElementById('confirm-overlay').addEventListener('click',e=>{if(e.target===e.currentTarget)closeConfirm();});
 window.addEventListener('resize',()=>{if(view==='dash')drawBarChart();});
 
-// ── SERVICE WORKER REGISTRATION ──
+// ── SERVICE WORKER : désactivé pendant le développement ──
 if('serviceWorker' in navigator) {
-  window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  navigator.serviceWorker.getRegistrations().then(regs => {
+    regs.forEach(r => r.unregister());
   });
 }
 
@@ -1262,23 +1262,32 @@ setTimeout(() => {
 
 // ── SUPABASE AUTH LISTENER ──
 db.auth.onAuthStateChange(async (event, session) => {
-  if(session?.user) {
-    currentUser = session.user;
-    document.getElementById('nav-user-email').textContent = currentUser.email;
-    showScreen('loading');
-    await loadData();
-    showScreen('app');
-    renderDash();
-  } else {
-    currentUser = null;
+  try {
+    if(session?.user) {
+      currentUser = session.user;
+      document.getElementById('nav-user-email').textContent = currentUser.email;
+      showScreen('loading');
+      await loadData();
+      showScreen('app');
+      renderDash();
+    } else {
+      currentUser = null;
+      showScreen('auth');
+    }
+  } catch(e) {
     showScreen('auth');
+    showToast('Erreur: ' + e.message);
   }
 });
 
 // ── INITIAL CHECK ──
 (async()=>{
-  const{data:{session}}=await db.auth.getSession();
-  if(!session){showScreen('auth');}
+  try {
+    const{data:{session}}=await db.auth.getSession();
+    if(!session) showScreen('auth');
+  } catch(e) {
+    showScreen('auth');
+  }
 })();</script>
 </body>
 </html>
